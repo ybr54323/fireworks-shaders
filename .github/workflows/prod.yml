@@ -1,0 +1,60 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    env:
+      WORKDIR: /www/wwwroot/examples/fireworks-shaders
+
+    strategy:
+      matrix:
+        node-version: [20.x]
+        # See supported Node.js release schedule at https://nodejs.org/en/about/releases/
+
+
+    steps:
+      - uses: actions/checkout@v4
+      - name: Use Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: "npm"
+      - run: npm ci
+      - run: npm run build --if-present
+
+      - name: Compress and save Docker image as tarball
+        run: |
+          echo "before compress"
+          ls -alh
+          tar -czvf dist.tar.gz dist
+          echo "after compress"
+          ls -alh
+      - name: Upload compressed tarball via SCP
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y sshpass rsync
+          mkdir -p ~/.ssh
+          # Add remote server's public key to known_hosts
+          ssh-keyscan ${{ secrets.PRODUCTION_SERVER_HOST }} >> ~/.ssh/known_hosts
+      - name: Upload file via SCP
+        run: |
+          sshpass -p ${{ secrets.PRODUCTION_SERVER_PASSWORD }} ssh ${{ secrets.PRODUCTION_SERVER_USER }}@${{ secrets.PRODUCTION_SERVER_HOST }} "mkdir -p ${WORKDIR}"
+          # 然后上传文件
+          sshpass -p ${{ secrets.PRODUCTION_SERVER_PASSWORD }} rsync -avz -e ssh dist.tar.gz ${{ secrets.PRODUCTION_SERVER_USER }}@${{ secrets.PRODUCTION_SERVER_HOST }}:${WORKDIR}/
+      - name: SSH into the server and run commands
+        uses: appleboy/ssh-action@master
+        with:
+          host: ${{ secrets.PRODUCTION_SERVER_HOST }}
+          username: ${{ secrets.PRODUCTION_SERVER_USER }}
+          password: ${{ secrets.PRODUCTION_SERVER_PASSWORD }}
+          port: 22
+          script: |
+            cd /www/wwwroot/examples/fireworks-shaders
+            tar -xzvf ./dist.tar.gz -C . --strip-components=1
+            rm -f dist.tar.gz
